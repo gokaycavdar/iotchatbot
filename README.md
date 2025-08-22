@@ -1,97 +1,52 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
 
-# Getting Started
+<img width="1456" height="652" alt="diagram" src="https://github.com/user-attachments/assets/7766c27b-7b22-4bf9-8184-56d29eaac202" />
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+🔥 IoT Anomaly Detection System
 
-## Step 1: Start Metro
+📌 About the Project
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+This project was built on an ESP32 microcontroller and designed to detect anomalies from environmental sensor data. The goal was to explore real-time IoT data processing, anomaly detection with machine learning, and mobile app integration.
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+We developed the system on the Arduino platform and implemented it with RTOS (Real-Time Operating System) so that different tasks could run in a multithreaded manner.
 
-```sh
-# Using npm
-npm start
+The device collected data every 10 seconds from:
 
-# OR using Yarn
-yarn start
-```
+A temperature sensor
 
-## Step 2: Build and run your app
+A methane gas sensor
 
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
+For current measurement, instead of a physical sensor, We generated a sample dataset as a text file and read it directly from the ESP32’s flash memory.
 
-### Android
+An Edge Impulse ML model was trained for anomaly detection. When anomalies were detected, the results were sent to Firebase Firestore.
 
-```sh
-# Using npm
-npm run android
+On the mobile side, We developed a React Native application that listens to Firestore. Whenever a new anomaly entry was written, the app triggered a real-time push notification to the user.
 
-# OR using Yarn
-yarn android
-```
+Apart from anomalies, every 5 minutes the system calculated the average values of normal readings and saved them in a separate Firestore collection. Using this dataset, I also integrated a chatbot powered by Gemini API, which allowed users to query and interact with their IoT data in a more intuitive way.
 
-### iOS
+⚙️ Tech Stack
 
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
+ESP32 (Arduino + RTOS)
 
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
+Temperature Sensor + Methane Gas Sensor
 
-```sh
-bundle install
-```
+Edge Impulse (Machine Learning for anomaly detection)
 
-Then, and every time you update your native dependencies, run:
+Firebase Firestore
 
-```sh
-bundle exec pod install
-```
+React Native (mobile app)
 
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
+Gemini API (chatbot integration)
 
-```sh
-# Using npm
-npm run ios
+🌟 Key Features
 
-# OR using Yarn
-yarn ios
-```
+Real-time sensor data collection (temperature, methane gas, and simulated current data)
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+ML-based anomaly detection deployed on ESP32
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
+Anomaly events sent to Firebase Firestore
 
-## Step 3: Modify your app
+Mobile app notifications via React Native
 
-Now that you have successfully run the app, let's make changes!
+Data aggregation (5-minute averages) for historical tracking
 
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
-
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
-
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
-
-## Congratulations! :tada:
-
-You've successfully run and modified your React Native App. :partying_face:
-
-### Now what?
-
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
-
-# Troubleshooting
-
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+Chatbot functionality with Gemini API for interactive data queries
