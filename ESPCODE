@@ -1,0 +1,248 @@
+#include "FS.h"
+#include "SPIFFS.h"
+#include "DHT.h"
+#include <WiFi.h>
+#include "time.h"
+#include <HTTPClient.h>
+#include "esp32_inferencing.h"
+
+#define WIFI_SSID "Gökay"
+#define WIFI_PASSWORD "cavdar899"
+#define API_KEY "AIzaSyCtKu_TMg8WYP"
+#define PROJECT_ID "iotprojectwithesp32"
+#define DHTPIN 4
+#define DHTTYPE DHT11
+#define COPIN 35
+DHT dht(DHTPIN, DHTTYPE);
+
+SemaphoreHandle_t dataMutex;
+
+ei_impulse_result_t result;
+signal_t ei_signal;
+float features[2];
+
+const int MAX_READINGS = 60;
+float co_readings[MAX_READINGS];
+float temp_readings[MAX_READINGS];
+float gas_readings[MAX_READINGS];
+float electricity_readings[MAX_READINGS];
+int reading_index = 0;
+size_t last_position = 0;
+
+void connectWiFi() {
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected");
+}
+
+void sendAveragesToFirestore(float co_avg, float temp_avg, float gas_avg, float elec_avg) {
+  Serial.println("Firestore veri gonderme basladi...");
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Zaman alinmadi!");
+    return;
+  }
+
+  char timestampISO[30];
+    strftime(timestampISO, sizeof(timestampISO), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String url = "https://firestore.googleapis.com/v1/projects/" + String(PROJECT_ID) +
+     "/databases/(default)/documents/test_sensor_data?key=" + String(API_KEY);
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+
+    String jsonPayload = "{";
+    jsonPayload += "\"fields\": {";
+    jsonPayload += "\"timestamp\": {\"timestampValue\": \"" + String(timestampISO) + "\"},";
+
+    jsonPayload += "\"co_avg\": {\"doubleValue\": " + String(co_avg) + "},";
+    jsonPayload += "\"temp_avg\": {\"doubleValue\": " + String(temp_avg) + "},";
+    jsonPayload += "\"gas_avg\": {\"doubleValue\": " + String(gas_avg) + "},";
+    jsonPayload += "\"elec_avg\": {\"doubleValue\": " + String(elec_avg) + "}";
+    jsonPayload += "}}";
+
+    int httpResponseCode = http.POST(jsonPayload);
+    if (httpResponseCode > 0) {
+      Serial.print("Firestore HTTP Response code: ");
+      Serial.println(httpResponseCode);
+    } else {
+      Serial.print("Error on sending POST: ");
+      Serial.println(http.errorToString(httpResponseCode).c_str());
+    }
+    http.end();
+  } else {
+    Serial.println("WiFi disconnected!");
+  }
+}
+
+void sensorTask(void* parameter) {
+  while (true) {
+    if (reading_index < MAX_READINGS) {
+      int co_raw = analogRead(COPIN);
+      float temperature = dht.readTemperature();
+
+      File file = SPIFFS.open("/data.txt");
+      if (!file) {
+        Serial.println("CSV file open failed!");
+        vTaskDelay(pdMS_TO_TICKS(100));
+        continue;
+      }
+
+      file.seek(last_position);
+      String line = file.readStringUntil('\n');
+      if (line.length() == 0) {
+        file.seek(0);
+        line = file.readStringUntil('\n');
+        Serial.println("Circular read: Restarted");
+      }
+      last_position = file.position();
+      file.close();
+
+      float gas_value = 0, electricity_value = 0;
+      int separatorIndex = line.indexOf(',');
+      if (separatorIndex > 0) {
+        gas_value = line.substring(0, separatorIndex).toFloat();
+        electricity_value = line.substring(separatorIndex + 1).toFloat();
+      }
+      bool anomaly = false;
+      //features[0] = (float)co_raw;
+      features[0] = gas_value;
+      features[1] = electricity_value;
+
+      // Signal yapısını oluştur
+      // Signal yapısını oluştur
+ei_signal.total_length = EI_CLASSIFIER_RAW_SAMPLE_COUNT;
+ei_signal.get_data = &get_signal_data;
+
+// Modeli çalıştır
+EI_IMPULSE_ERROR res = run_classifier(&ei_signal, &result, false);
+
+      if (res != EI_IMPULSE_OK) {
+        Serial.print("ML çalıştırma hatası: ");
+        Serial.println(res);
+      }else {
+        float anomaly_score = result.anomaly;
+        Serial.print("Anomali skoru: ");
+        Serial.println(anomaly_score);
+
+      if (anomaly_score > 1.5 || co_raw > 1800) { // Bu eşik test sonuçlarına göre ayarlanabilir
+        anomaly = true;
+      }
+      }
+
+      xSemaphoreTake(dataMutex, portMAX_DELAY);
+      co_readings[reading_index] = co_raw;
+      temp_readings[reading_index] = temperature;
+      gas_readings[reading_index] = gas_value;
+      electricity_readings[reading_index] = electricity_value;
+      reading_index++;
+      xSemaphoreGive(dataMutex);
+      if (anomaly) {
+      sendAnomalyToFirestore(temperature,co_raw, gas_value, electricity_value); // ayrı fonksiyonda
+      }
+      Serial.printf("CO: %d | Temp: %.2f | Gas: %.2f | Elec: %.2f\n", co_raw, temperature, gas_value, electricity_value);
+    }
+    vTaskDelay(pdMS_TO_TICKS(5000));
+  }
+}
+
+void uploadTask(void* parameter) {
+    while (true) {
+    if (reading_index >= MAX_READINGS) {
+      float co_sum = 0, temp_sum = 0, gas_sum = 0, elec_sum = 0;
+
+      xSemaphoreTake(dataMutex, portMAX_DELAY);
+      for (int i = 0; i < MAX_READINGS; i++) {
+        co_sum += co_readings[i];
+        temp_sum += temp_readings[i];
+        gas_sum += gas_readings[i];
+        elec_sum += electricity_readings[i];
+      }
+      reading_index = 0;
+      xSemaphoreGive(dataMutex);
+
+      float co_avg = co_sum / MAX_READINGS;
+      float temp_avg = temp_sum / MAX_READINGS;
+      float gas_avg = gas_sum / MAX_READINGS;
+      float elec_avg = elec_sum / MAX_READINGS;
+      sendAveragesToFirestore(co_avg, temp_avg, gas_avg, elec_avg);
+    }
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  dht.begin();
+
+  if (!SPIFFS.begin(true)) {
+    Serial.println("SPIFFS mount failed");
+    return;
+  }
+  connectWiFi();
+  configTime(10800, 0, "pool.ntp.org", "time.nist.gov");
+
+  dataMutex = xSemaphoreCreateMutex();
+  xTaskCreatePinnedToCore(sensorTask, "SensorTask", 8192, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(uploadTask, "UploadTask", 8192, NULL, 1, NULL, 0);
+}
+
+void sendAnomalyToFirestore(float temp,float co, float gas, float elec) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi not connected. Anomaly not sent.");
+    return;
+  }
+
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Zaman alınamadı!");
+    return;
+  }
+
+  char timestampISO[30];
+  strftime(timestampISO, sizeof(timestampISO), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
+
+  HTTPClient http;
+  String url = "https://firestore.googleapis.com/v1/projects/" + String(PROJECT_ID) +
+               "/databases/(default)/documents/test_anomalies?key=" + String(API_KEY);
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+
+  String jsonPayload = "{";
+  jsonPayload += "\"fields\": {";
+  jsonPayload += "\"timestamp\": {\"timestampValue\": \"" + String(timestampISO) + "\"},";
+  jsonPayload += "\"co_avg\": {\"doubleValue\": " + String(co) + "},";
+  jsonPayload += "\"temp_avg\": {\"doubleValue\": " + String(temp) + "},";
+  jsonPayload += "\"gas_avg\": {\"doubleValue\": " + String(gas) + "},";
+  jsonPayload += "\"elec_avg\": {\"doubleValue\": " + String(elec) + "}";
+  jsonPayload += "}}";
+
+  int httpCode = http.POST(jsonPayload);
+  if (httpCode > 0) {
+    Serial.print("Anomaly sent. HTTP response code: ");
+    Serial.println(httpCode);
+  } else {
+    Serial.print("Error sending anomaly: ");
+    Serial.println(http.errorToString(httpCode).c_str());
+  }
+
+  http.end();
+}
+int get_signal_data(size_t offset, size_t length, float *out_ptr) {
+  memcpy(out_ptr, features + offset, length * sizeof(float));
+  return 0;
+}
+
+void loop() {
+}
+
+
+
+
